@@ -26,18 +26,34 @@ contract ElecTrust {
     }
 
     // Array to store all elections
-    Election[] public elections;
+    Election[] private elections;
 
     // Error definitions
     error InvalidName();
+    error InvalidCandidateName();
     error InvalidCandidateIndex();
     error HasVoted();
     error VotingEnd();
     error UnauthorizedVoter();
+    error ElectionNotFound();
+    error CandidateNotFound();
 
     // Event emitted when an election is created
-    event ElectionCreated(string electionName, uint256 indexed totalCandidates);
-    event Voted(address indexed voter, uint256 indexed elections, uint256 indexed candidateBeingVoted);
+    event ElectionCreated(string electionName, uint256 indexed totalCandidates, bool strictVoters);
+    event Voted(address indexed voter, string elections, string candidateBeingVoted);
+
+    modifier checkValidElection(uint256 electionIndex) {
+        if (electionIndex >= getNumberOfElections()) revert ElectionNotFound();
+        _;
+    }
+
+    modifier checkValidElectionAndCandidate(uint256 electionIndex, uint256 candidateIndex) {
+        if (electionIndex >= getNumberOfElections()) revert ElectionNotFound();
+        if (candidateIndex > elections[electionIndex].totalCandidates || candidateIndex == 0) {
+            revert CandidateNotFound();
+        }
+        _;
+    }
 
     /**
      * @notice Creates a new election.
@@ -52,15 +68,12 @@ contract ElecTrust {
         address[] calldata voters,
         uint256 duration
     ) external {
-        if (!_checkLen(name)) {
-            revert InvalidName();
-        }
-        if (candidates.length == 0) {
-            revert InvalidCandidateIndex();
-        }
+        if (!_checkLen(name)) revert InvalidName();
+        if (candidates.length == 0) revert InvalidCandidateIndex();
         Election storage _election = elections.push();
-        for (uint256 i = 0; i < candidates.length;) {
-            _election.candidates[i].name = candidates[i];
+        for (uint256 i = 1; i <= candidates.length;) {
+            if (!_checkLen(candidates[i - 1])) revert InvalidCandidateName();
+            _election.candidates[i].name = candidates[i - 1];
             unchecked {
                 ++i;
             }
@@ -80,7 +93,7 @@ contract ElecTrust {
         _election.startTime = block.timestamp;
         _election.duration = duration;
         _election.totalCandidates = candidates.length;
-        emit ElectionCreated(name, candidates.length);
+        emit ElectionCreated(name, candidates.length, _election.strictVoters);
     }
 
     /**
@@ -88,10 +101,11 @@ contract ElecTrust {
      * @param electionIndex The index of the election.
      * @param candidateIndex The index of the candidate to vote for.
      */
-    function vote(uint256 electionIndex, uint256 candidateIndex) external {
-        if (elections[electionIndex].hasVoted[msg.sender]) {
-            revert HasVoted();
-        }
+    function vote(uint256 electionIndex, uint256 candidateIndex)
+        external
+        checkValidElectionAndCandidate(electionIndex, candidateIndex)
+    {
+        if (elections[electionIndex].hasVoted[msg.sender]) revert HasVoted();
         if (block.timestamp > elections[electionIndex].startTime + elections[electionIndex].duration) {
             revert VotingEnd();
         }
@@ -106,17 +120,30 @@ contract ElecTrust {
                 revert UnauthorizedVoter();
             }
         }
-        emit Voted(msg.sender, electionIndex, candidateIndex);
+        emit Voted(
+            msg.sender, elections[electionIndex].electionName, elections[electionIndex].candidates[candidateIndex].name
+        );
     }
 
     /**
      * @notice Retrieves information about an election.
-     * @param index The index of the election.
-     * @return The name, start time, duration, total candidates, and eligible voters of the election.
+     * @param electionIndex The index of the election.
+     * @return The name, start time, duration, total candidates, and strict voters state.
      */
-    function getElectionInfo(uint256 index) public view returns (string memory, uint256, uint256, uint256) {
-        Election storage election = elections[index];
-        return (election.electionName, election.startTime, election.duration, election.totalCandidates);
+    function getElectionInfo(uint256 electionIndex)
+        external
+        view
+        checkValidElection(electionIndex)
+        returns (string memory, uint256, uint256, uint256, bool)
+    {
+        Election storage election = elections[electionIndex];
+        return (
+            election.electionName,
+            election.startTime,
+            election.duration,
+            election.totalCandidates,
+            election.strictVoters
+        );
     }
 
     /**
@@ -125,7 +152,12 @@ contract ElecTrust {
      * @param candidateIndex The index of the candidate.
      * @return The name and vote count of the candidate.
      */
-    function getCandidate(uint256 electionIndex, uint256 candidateIndex) public view returns (string memory, uint256) {
+    function getCandidate(uint256 electionIndex, uint256 candidateIndex)
+        external
+        view
+        checkValidElectionAndCandidate(electionIndex, candidateIndex)
+        returns (string memory, uint256)
+    {
         Candidate storage candidate = elections[electionIndex].candidates[candidateIndex];
         return (candidate.name, candidate.voteCount);
     }
@@ -136,7 +168,7 @@ contract ElecTrust {
      * @param voter The address of the voter.
      * @return A boolean indicating whether the voter has voted.
      */
-    function getHasVoted(uint256 electionIndex, address voter) public view returns (bool) {
+    function getHasVoted(uint256 electionIndex, address voter) external view checkValidElection(electionIndex) returns (bool) {
         return elections[electionIndex].hasVoted[voter];
     }
 
